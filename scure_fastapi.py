@@ -10,7 +10,8 @@ from fastapi.openapi.models import OAuthFlows as OAuthFlowsModel
 from fastapi.security.utils import get_authorization_scheme_param
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from pydantic import BaseModel, constr, EmailStr
+
+from FastAPI_secure.models import TokenData, User, UserInDB, Token, Todo
 
 # to get a string like this run:
 # openssl rand -hex 32
@@ -33,6 +34,7 @@ fake_users_db = {
     }
 }
 
+todos_list = []
 
 class OAuth2PasswordBearerWithCookie(OAuth2):
     def __init__(
@@ -61,26 +63,6 @@ class OAuth2PasswordBearerWithCookie(OAuth2):
             else:
                 return None
         return param
-
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
-
-class TokenData(BaseModel):
-    username: Union[str, None] = None
-
-
-class User(BaseModel):
-    username: constr(min_length=3)
-    email: Union[EmailStr, None] = None
-    password: Union[constr(min_length=8), None] = None
-    disabled: Union[bool, None] = None
-
-
-class UserInDB(User):
-    hashed_password: str
 
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -123,30 +105,30 @@ def create_access_token(data: dict, expires_delta: Union[timedelta, None] = None
     return encoded_jwt
 
 
-# async def get_current_user(token: str = Depends(oauth2_cookie_scheme)):
-#     credentials_exception = HTTPException(
-#         status_code=status.HTTP_401_UNAUTHORIZED,
-#         detail="Could not validate credentials",
-#         headers={"WWW-Authenticate": "Bearer"},
-#     )
-#     try:
-#         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-#         username: str = payload.get("sub")
-#         if username is None:
-#             raise credentials_exception
-#         token_data = TokenData(username=username)
-#     except JWTError:
-#         raise credentials_exception
-#     user = get_user(fake_users_db, username=token_data.username)
-#     if user is None:
-#         raise credentials_exception
-#     return user
-#
-#
-# async def get_current_active_user(current_user: User = Depends(get_current_user)):
-#     if current_user and current_user.disabled:
-#         raise HTTPException(status_code=400, detail="Inactive user")
-#     return current_user
+async def get_current_user(token: str = Depends(oauth2_cookie_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+        token_data = TokenData(username=username)
+    except JWTError:
+        raise credentials_exception
+    user = get_user(fake_users_db, username=token_data.username)
+    if user is None:
+        raise credentials_exception
+    return user
+
+
+async def get_current_active_user(current_user: User = Depends(get_current_user)):
+    if current_user and current_user.disabled:
+        raise HTTPException(status_code=400, detail="Inactive user")
+    return current_user
 
 
 @app.post("/token", response_model=Token)
@@ -169,18 +151,27 @@ async def login_for_access_token(response: Response, form_data: OAuth2PasswordRe
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-# @app.get("/users/me", response_model=User)
-# async def read_users_me(current_user: User = Depends(get_current_active_user)):
-#     return current_user
-#
-#
-# @app.get("/users/me/items/")
-# async def read_own_items(current_user: User = Depends(get_current_active_user)):
-#     return [{"item_id": "Foo", "owner": current_user.username}]
+@app.get("/users/me", response_model=User)
+async def read_users_me(current_user: User = Depends(get_current_active_user)):
+    return current_user
 
+@app.post("/users/todo")
+async def create_todo(todo: Todo, current_user: User = Depends(get_current_active_user)):
+    todos_list.append(todo)
+    return "The todo has been successfully added"
 
-# @app.on_event("startup")
-# def hello():
-#     print("Morning")
+@app.get("/users/me/todo", response_model=list[Todo])
+async def get_todos_by_user(current_user: User = Depends(get_current_active_user)):
+    todo_list = [todo for todo in todos_list if todo.owner == current_user.username]
+    return todo_list
+
+@app.get("/users/todo/{todo_id}")
+async def get_todo_by_id(todo_id: str, current_user: User = Depends(get_current_active_user)):
+    todo = None
+    for t in todos_list:
+        if t.owner == current_user.username and str(t.id) == todo_id:
+            todo = t
+    return todo
+
 
 uvicorn.run(app, host="127.0.0.1",port=3000)
